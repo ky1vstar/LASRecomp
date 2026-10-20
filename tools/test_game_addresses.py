@@ -86,6 +86,8 @@ strip_c = re.compile(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"', re.S)
 for path in (ROOT/'runtime').rglob('*'):
     if path.suffix not in ('.c', '.h', '.m', '.mm', '.cpp') or path.parent.name == 'game_addresses':
         continue
+    if path.name == 'guest_base.h':  # the layout parameter and the GA()/GA_SDK() helpers, not game addresses
+        continue
     code = strip_c.sub('', path.read_text(encoding='utf-8'))
     assert set(re.findall(r'\bGA_([A-Z][A-Z0-9_]*)\b', code)) <= values.keys(), str(path)
     for match in re.finditer(r'0x(700[0-9a-fA-F]{7})', code):

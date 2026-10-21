@@ -30,14 +30,21 @@ runtime_values = load_table(ROOT/'runtime/game_addresses/runtime_v1_0_0.h')
 assert not patch_values.keys() & runtime_values.keys(), 'Define each address in one header'
 values = patch_values | runtime_values
 assert len(values) == len(set(values.values())), 'Use the existing name for shared addresses'
+# (the fixture holds the default base's absolute addresses and outputs: at another LARECOMP_GUEST_BASE - the iOS
+# build's - only the table / native agreement below is checked)
+from game_addresses import GUEST_BASE
+default_base = GUEST_BASE == 0x7000000000
 fixture = json.loads((ROOT/'tools/tests/patches_v1_0_0.json').read_text())
-assert set(PATCHES) == {int(a, 16) for a in fixture['patches']}
-for address, expected in fixture['patches'].items():
-    address = int(address, 16)
-    gen = SimpleNamespace(base=address, nso=SimpleNamespace(image=struct.pack('<I', int(expected['word'], 16))))
-    code = PATCHES[address](gen, address)
-    assert hashlib.sha256(code.encode()).hexdigest() == expected['sha256'], f'Patch output changed at {address:x}'
-assert hashlib.sha256(json.dumps(HOOKS, sort_keys=True).encode()).hexdigest() == fixture['hooks_sha256']
+if default_base:
+    assert set(PATCHES) == {int(a, 16) for a in fixture['patches']}
+    for address, expected in fixture['patches'].items():
+        address = int(address, 16)
+        gen = SimpleNamespace(base=address, nso=SimpleNamespace(image=struct.pack('<I', int(expected['word'], 16))))
+        code = PATCHES[address](gen, address)
+        assert hashlib.sha256(code.encode()).hexdigest() == expected['sha256'], f'Patch output changed at {address:x}'
+    assert hashlib.sha256(json.dumps(HOOKS, sort_keys=True).encode()).hexdigest() == fixture['hooks_sha256']
+else:
+    assert len(PATCHES) == len(fixture['patches']) and all(a >> 36 == GUEST_BASE >> 36 for a in PATCHES)
 assert addr_text('f_@HAS_ITEM@(c);') == f'f_{ADDRESS.HAS_ITEM:x}(c);'
 try:
     addr_text('@UNKNOWN_ADDRESS@')
@@ -59,7 +66,7 @@ with tempfile.TemporaryDirectory() as tmp:
                       'switch (addresses[0]) { case GA_ASPECT_LITERAL: return 0; default: return 1; }\n}\n')
     exe = tmp/('addresses.exe' if os.name == 'nt' else 'addresses')
     cc = shlex.split(os.environ.get('CC', 'clang'))
-    subprocess.run(cc+['-std=c11', '-Iruntime', str(source), '-o', str(exe)], cwd=ROOT, check=True)
+    subprocess.run(cc+['-std=c11', '-Iruntime', f'-DLARECOMP_GUEST_BASE={GUEST_BASE:#x}', str(source), '-o', str(exe)], cwd=ROOT, check=True)
     observed = [int(line, 16) for line in subprocess.check_output([str(exe)]).splitlines()]
     assert observed == list(values.values())
     # Same resource location used by tools/lasgen.spec in the frozen helper.

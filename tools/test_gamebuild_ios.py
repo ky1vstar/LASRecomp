@@ -106,6 +106,11 @@ with tempfile.TemporaryDirectory() as temporary:
     os.environ.pop('LARECOMP_CC', None)
     cc = shlex.split(os.environ.get('CC', 'clang'))
     cxx = shlex.split(os.environ.get('CXX', 'clang++'))
+    if os.name == 'nt':  # (find_tools wants the exe's import library; the iOS link doesn't use it)
+        (resources/'build').mkdir()
+        stub = tmp/'stub.c'; stub.write_text('int fixture_export;\n')
+        subprocess.run(cc+[str(stub), '-shared', '-Wl,--out-implib,'+str(resources/'build/lasrecomp.dll.a'),
+                           '-o', str(tmp/'stub.dll')], check=True)
     obj = tmp/'gamebuild.o'
     subprocess.run(cc+['-std=gnu11', '-fPIC', '-Iruntime', '-DGAMELIB_ID="fixture"', '-DGAMELIB_IOS_ID="fixture-ios"',
                        '-DGAMELIB_CFLAGS="-O0"', '-DGAMELIB_SHARED="-shared"',
@@ -116,6 +121,14 @@ with tempfile.TemporaryDirectory() as temporary:
                         'runtime/build_cache.cpp', '-x', 'none', str(obj), '-o', str(libfile)] +
                    (['-Wl,--export-all-symbols'] if os.name == 'nt' else []), cwd=ROOT, check=True)
     library = ct.CDLL(str(libfile))
+    processes = {}
+    def unload():  # (Windows: a loaded DLL can't be deleted with the temporary folder)
+        for p in processes.values():
+            if p.poll() is None: p.kill()
+            p.wait()
+        if os.name == 'nt':
+            import _ctypes
+            _ctypes.FreeLibrary(library._handle)
     SPAWN = ct.CFUNCTYPE(ct.c_ssize_t, ct.POINTER(ct.c_char_p), ct.c_char_p, ct.c_bool)
     WAIT = ct.CFUNCTYPE(ct.c_int, ct.c_ssize_t, ct.c_bool)
     KILL = ct.CFUNCTYPE(None, ct.c_ssize_t)
@@ -124,7 +137,7 @@ with tempfile.TemporaryDirectory() as temporary:
     class Options(ct.Structure):
         _fields_ = [('progress', PROGRESS), ('jobs', ct.c_int), ('cancelled', CANCEL),
                     ('target', ct.c_int), ('ios_skeleton', ct.c_char_p)]
-    processes = {}; launched = []; next_id = 0
+    launched = []; next_id = 0
     @SPAWN
     def spawn(args, log, append):
         global next_id
@@ -158,10 +171,10 @@ with tempfile.TemporaryDirectory() as temporary:
     library.gamebuild_run.argtypes = [ct.c_char_p, ct.POINTER(Options), ct.c_void_p, ct.c_size_t]
     library.gamebuild_run.restype = ct.c_bool
     why = ct.create_string_buffer(1024)
-    assert not library.gamebuild_ios_available(str(tmp/'nowhere').encode(), why, len(why)) and b'skeleton' in why.value, why.value
-    assert library.gamebuild_ios_available(str(skeleton).encode(), why, len(why)), why.value
     options = Options(progress, 2, cancelled, 1, str(skeleton).encode())
     try:
+        assert not library.gamebuild_ios_available(str(tmp/'nowhere').encode(), why, len(why)) and b'skeleton' in why.value, why.value
+        assert library.gamebuild_ios_available(str(skeleton).encode(), why, len(why)), why.value
         assert library.gamebuild_run(str(game).encode(), ct.byref(options), why, len(why)), (why.value, [p.read_text() for p in (game/'.gamebuild').glob('*.log')])
         compiles = [a for a in launched if '-c' in a]
         assert compiles and all('aarch64-ios' in ' '.join(a) and 'any-darwin-any' in ' '.join(a) for a in compiles), compiles[0]
@@ -175,7 +188,4 @@ with tempfile.TemporaryDirectory() as temporary:
         print(f'iOS game-code build on {HOST}: compile for arm64 iOS with the skeleton\'s headers, link with its lld, '
               f'{out.stat().st_size} byte dylib passed')
     finally:
-        for pid in list(processes): kill(pid)
-        if os.name == 'nt':
-            import _ctypes
-            _ctypes.FreeLibrary(library._handle)
+        unload()

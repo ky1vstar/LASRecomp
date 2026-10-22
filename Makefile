@@ -54,7 +54,8 @@ MINFLAG  := $(if $(MACOS_MIN),-mmacosx-version-min=$(MACOS_MIN))
 CC       := clang $(MINFLAG) $(CROSS)
 CXX      := clang++ $(MINFLAG) $(CROSS)
 IMGUI    := third_party/imgui
-GENFLAGS := -O1 -fno-strict-aliasing -Wno-return-type -Wno-unused-label -fvisibility=hidden -Iruntime $(BASEFLAG)
+GENFLAGS_BASE := -O1 -fno-strict-aliasing -Wno-return-type -Wno-unused-label -fvisibility=hidden -Iruntime
+GENFLAGS := $(GENFLAGS_BASE) $(BASEFLAG)
 
 # The game code (made by `make gen` from your own game files) is its own library next to the app (runtime/gamelib.h);
 # the app itself holds none of it
@@ -168,10 +169,11 @@ GAMELIB_FULL_ID := $(GAMELIB_ID)-$(or $(GAMELIB_BUILD),unknown)
 GAMELIB_BASE_SRCS := runtime/cpu.h runtime/simd.h runtime/simd_fp.h runtime/gamelib.h tools/fetch_zig.sh
 GAMELIB_BASE_ID := $(shell (cat $(GAMELIB_BASE_SRCS); echo '$(GENFLAGS) $(GAMELIB_SHARED)') | \
                      (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-16)
-# The iOS library the macOS start screen can build (runtime/gamebuild.c GAMEBUILD_IOS): the id and flags of
-# `make PLATFORM=ios` (the same GENFLAGS at the iOS guest base), so the exported app's runtime accepts it
+# The iOS library the start screen can build on any desktop (runtime/gamebuild.c GAMEBUILD_IOS): the id and flags of
+# `make PLATFORM=ios` - the base GENFLAGS at the iOS guest base, none of this host's additions (-march, -fPIC,
+# _FILE_OFFSET_BITS) - so the exported app's runtime accepts it whichever desktop built it
 IOS_GUEST_BASE := 0x800000000
-GENFLAGS_IOS := $(filter-out $(BASEFLAG),$(GENFLAGS)) -DLARECOMP_GUEST_BASE=$(IOS_GUEST_BASE)ull
+GENFLAGS_IOS := $(GENFLAGS_BASE) -DLARECOMP_GUEST_BASE=$(IOS_GUEST_BASE)ull
 GAMELIB_IOS_ID := $(shell (cat $(GAMELIB_SRCS); echo '$(GENFLAGS_IOS)') | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-16)
 
 RT_OBJ   := $(patsubst runtime/%.cpp,$(B)/rt/%.o,$(patsubst runtime/%.c,$(B)/rt/%.o,$(RT_SRC)))

@@ -1507,14 +1507,16 @@ static void prelaunch_tab(float sc) {
     ImGui::Spacing();
     ImGui::Spacing();
     heading(L("Data folder"));
-    ImGui::PushTextWrapPos(0);
-    ImGui::TextDisabled("%s", rt_data_root());
-    ImGui::PopTextWrapPos();
     const char *fixed = rt_data_root_fixed() ? L(rt_data_root_fixed()) : NULL;
+    ImGui::PushTextWrapPos(0);
+    ImGui::TextDisabled("%s", PLAT_IOS ? fixed : rt_data_root());  // (iOS: the sandbox path means nothing to a player)
+    ImGui::PopTextWrapPos();
+#if !PLAT_IOS
     ImGui::BeginDisabled(fixed != NULL);
     if (ImGui::Button(L("Change..."))) choose_data_folder();
     ImGui::EndDisabled();
     if (fixed) ImGui::SameLine(), ImGui::TextDisabled("%s", fixed);
+#endif
     ImGui::Spacing();
     ImGui::Spacing();
     heading(L("Game font"));

@@ -469,6 +469,7 @@ const char *rt_data_root_fixed(void) {
     const char *env = getenv("LARECOMP_DATA_ROOT");
     if (env && *env) return "Set by LARECOMP_DATA_ROOT.";
     if (g_dev) return "A source checkout uses its own folder.";
+    if (PLAT_IOS) return "The app's folder in Files (On My iPhone > LAS Recomp).";  // (the sandbox: nowhere else)
     return NULL;
 }
 

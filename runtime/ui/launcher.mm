@@ -28,7 +28,6 @@
 #include "pad_nav.h"
 #include "plastic.h"
 #include "ios_export_ui.h"
-#include "ios_launcher.h"
 #include "touch_ui.h"
 static TouchUi g_touch;  // (touch screens: the start screen's pages)
 #ifdef __APPLE__
@@ -306,9 +305,6 @@ static void set_job(const std::string &s, bool failed = false, const std::string
 
 // (the not-found failure's hint, and the caption over the game files page's example folder)
 static const char *const PICK_FOLDER_HINT = "Choose the folder that has the game's exefs and romfs folders in it.";
-// (iOS: the same folder, copied into LAS Recomp's folder in the Files app - runtime/ui/ios_launcher.mm)
-static const char *const IOS_COPY_HINT = "Copy the folder that has the game's exefs and romfs folders into LAS Recomp's "
-                                         "folder in the Files app, then Set up.";
 
 // Setup failures: a short headline and what to do next (also LARECOMP_LAUNCHER_SHOT=<f>:fail<1-6>, screenshots)
 enum { FAIL_NOT_FOUND = 1, FAIL_UNUSABLE, FAIL_COPY, FAIL_VERSION, FAIL_MISSING, FAIL_BUILD };
@@ -334,8 +330,7 @@ static void set_failure(int k, int have = -1, const char *reason = NULL) {
         set_job(head[k], true, b);
         return;
     }
-    const char *h = k == FAIL_NOT_FOUND && PLAT_IOS ? IOS_COPY_HINT : hint[k];
-    set_job(head[k], true, reason ? std::string(reason) + " " + h : h);
+    set_job(head[k], true, reason ? std::string(reason) + " " + hint[k] : hint[k]);
 }
 
 static bool is_dir(const std::string &p) {
@@ -423,12 +418,14 @@ static void stop_background_prep(void) {
 static float extract_progress(void) {
     if (float p = g_prep_frac; p >= 0) return p > 1 ? 1 : p;
     unsigned long long t = g_total, d = g_done;
-    float b = g_build_frac, f = b >= 0 ? (g_copy_skipped ? b : 0.1f + 0.9f * b) : t ? 0.1f * (float)((double)d / (double)t) : 0;
+    const float copy_share = PLAT_IOS ? 1.0f : 0.1f;  // (iOS: no build - the copy is the whole bar)
+    float b = g_build_frac, f = b >= 0 ? (g_copy_skipped ? b : copy_share + (1 - copy_share) * b) : t ? copy_share * (float)((double)d / (double)t) : 0;
     return f < 0 ? 0 : f > 0.99f ? 0.99f : f;
 }
 
 // Builds the game code from the copied files (a few minutes); false = failed (the job line says so)
 static bool build_game_code(void) {
+    if (PLAT_IOS) return true;  // (the game code ships in the app: Frameworks/LASGame.framework)
     int cores = SDL_GetNumLogicalCPUCores(), ram_gb = SDL_GetSystemRAM() / 1024;
     GameBuildOpts o = {build_progress, cores < ram_gb - 2 ? cores : ram_gb - 2 > 1 ? ram_gb - 2 : 1, build_cancelled};
     char why[256] = "";
@@ -533,6 +530,25 @@ static void SDLCALL picked(void *, const char *const *files, int) {
     g_src = files[0];
     if (g_job == PICKER_FAILED) g_job.clear(), g_job_hint.clear(), g_job_failed = false;
     pthread_mutex_unlock(&g_lock);
+}
+
+// The folder picker: SDL's dialog, or on iOS the Files app's (runtime/platform/ios_picker.m: SDL has none there)
+#if PLAT_IOS
+extern "C" void plat_ios_pick_folder(SDL_Window *, void (*)(void *, const char *), void *);
+extern "C" void plat_ios_open_documents(void);
+#endif
+static void show_folder_dialog(SDL_DialogFileCallback cb, void *ud, SDL_Window *win) {
+#if PLAT_IOS
+    struct Relay { SDL_DialogFileCallback cb; void *ud; };
+    static Relay relay;
+    relay = {cb, ud};
+    plat_ios_pick_folder(win, [](void *r, const char *path) {
+        const char *files[] = {path, NULL};  // ("": a cancel, as SDL's empty list)
+        ((Relay *)r)->cb(((Relay *)r)->ud, *path ? files : files + 1, -1);
+    }, &relay);
+#else
+    SDL_ShowOpenFolderDialog(cb, ud, win, NULL, false);
+#endif
 }
 
 // ------------------------------------------------------------------ OneDrive (Windows)
@@ -895,7 +911,7 @@ static void draw_folder_example(float w) {
     static const ImU32 dots[] = {IM_COL32(255, 95, 87, 255), IM_COL32(254, 188, 46, 255), IM_COL32(40, 200, 64, 255)};
     float dr = fs * 0.21f, cy = a.y + bar * 0.5f;
     for (int i = 0; i < 3; i++) dl->AddCircleFilled(ImVec2(a.x + fs * 0.65f + i * fs * 0.62f, cy), dr, dots[i]);
-    const char *t = PLAT_IOS ? "LAS Recomp" : "Documents";  // (iOS: the app's folder in the Files app)
+    const char *t = "Documents";
     ImVec2 tsz = font->CalcTextSizeA(ts, FLT_MAX, 0, t);
     dl->AddText(font, ts, ImVec2(a.x + (w - tsz.x) * 0.5f, cy - tsz.y * 0.5f), text, t);
     // the list: a disclosure triangle on folders, the folder / file glyph, the name
@@ -932,7 +948,7 @@ static void draw_folder_example(float w) {
         float nx = x + g + fs * 0.4f;
         dl->AddText(font, ts, ImVec2(nx, my - nsz.y * 0.5f), i == 0 ? text_sel : text, it.name);
         if (i == 0) {  // an arrow pointing back at the name, then what to do (smaller when the row is narrow)
-            const char *hint = PLAT_IOS ? "Copy this one in" : "Choose this one";
+            const char *hint = "Choose this one";
             float ax = nx + nsz.x + fs * 0.5f, aw = fs * 1.1f, gap = fs * 0.3f, room = b.x - fs * 0.6f - ax;
             float hs = ts, hw = font->CalcTextSizeA(hs, FLT_MAX, 0, hint).x;
             if (aw + gap + hw > room) hs *= fmaxf(0.7f, (room - aw - gap) / hw);
@@ -1123,37 +1139,6 @@ static void panel_layout(ImVec2 ds, float *sc, float *w, float *h, ImVec2 *centr
     *w = ds.x - 2 * sx - 2 * 12 * *sc, *h = ds.y - 2 * sy - 2 * 12 * *sc;
 #endif
 }
-
-// ------------------------------------------------------------------ iOS: the Game Files page (runtime/ui/ios_launcher.mm)
-// The game code ships in the app; the page only brings the player's files into place. The same hooks as the export's.
-#if PLAT_IOS
-static void ios_launcher_wire(void) {
-    static bool wired;
-    if (wired) return;
-    wired = true;
-    IosLauncherHost h = {
-        [] { pthread_mutex_lock(&g_lock); },
-        [] { pthread_mutex_unlock(&g_lock); },
-        &g_busy,
-        [](const std::string &line, bool failed, const std::string &hint) { set_job(line, failed, hint); },
-        [](int kind, int have) { set_failure(kind, have); },
-        [] {
-            stop_background_prep();
-            g_cancel_build = false;
-            g_done = 0, g_total = 0, g_phase_base = 0, g_build_frac = 0, g_copy_skipped = true;
-        },
-        build_progress,
-        [] { g_build_frac = -1; },
-        game_files_changed,
-        [](const std::string &dir, std::string &exefs, std::string &romfs, bool &unusable) { find_game(dir, 0, exefs, romfs, unusable); },
-        [](const std::string &dir) { return count_files(dir); },
-        [](const std::string &exefs) { return build_id_ok(exefs); },
-        ROMFS_FILES,
-        &g_root,
-    };
-    ios_launcher_init(h);
-}
-#endif
 
 // ------------------------------------------------------------------ iOS export (runtime/ui/ios_export_ui.mm)
 // Its page shares the setup's busy state, job line and progress bar through these hooks.
@@ -1419,7 +1404,7 @@ static void prelaunch_tab(float sc) {
     static double gb = -1;
     if (gb < 0) gb = rt_game_files_size(g_root.c_str()) / 1e9;
 #if PLAT_IOS
-    if (ImGui::Button("Open in Files")) ios_open_documents();
+    if (ImGui::Button("Open in Files")) plat_ios_open_documents();  // (ios_picker.m)
 #elif defined(_WIN32)
     if (ImGui::Button("Show in Explorer")) reveal_folder(g_root);
 #elif defined(__linux__)
@@ -1508,9 +1493,7 @@ extern "C" void launcher_run(const char *root) {
     g_root = root;
     g_start_screen = 1;
     menu_sfx_set_game_dir(root);
-#if PLAT_IOS
-    ios_launcher_wire();
-#else
+#if !PLAT_IOS
     ios_export_wire();
 #endif
     static bool update_checked;  // (once per launch, not again after a "Title screen" reboot)
@@ -2098,18 +2081,12 @@ extern "C" void launcher_run(const char *root) {
                     ios_export_rows(ready, busy, win);
                     first_row();
                 } else
-#else
-                if (!ready) {  // (the files come through the Files app: runtime/ui/ios_launcher.mm)
-                    ios_game_files_rows(busy);
-                    first_row();
-                    files_gb = -1;
-                } else
 #endif
                 if (!ready) {
                     opt_section("Your copy of the game");
                     if (busy) opt_disable_next();
                     if (opt_action("Game files folder", src_v.c_str(), src_d.c_str(), true))
-                        SDL_ShowOpenFolderDialog(picked, NULL, win, NULL, false);
+                        show_folder_dialog(picked, NULL, win);
                     check_left_of_value(src_v);
                     first_row();
                     opt_section("Set up");
@@ -2208,7 +2185,7 @@ extern "C" void launcher_run(const char *root) {
                     draw_folder_example(ew);
                     ImGui::Dummy(ImVec2(0, fs * 0.3f));  // (its shadow)
                     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ew);
-                    ImGui::TextColored(plastic_col(plastic_theme().text_dim), "%s", PLAT_IOS ? IOS_COPY_HINT : PICK_FOLDER_HINT);
+                    ImGui::TextColored(plastic_col(plastic_theme().text_dim), "%s", PICK_FOLDER_HINT);
                     ImGui::PopTextWrapPos();
                     opt_split_end();
                 }

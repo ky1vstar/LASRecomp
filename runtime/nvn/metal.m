@@ -1653,6 +1653,30 @@ bool ui_window_focused(void) { return window && (SDL_GetWindowFlags(window) & SD
 void *ui_metal_layer(void) { return (__bridge void *)layer; }
 void *ui_metal_device(void) { return (__bridge void *)dev; }
 
+// The layer's drawable size, each frame. iOS: the view's own bounds x scale (what SDL's Metal view sets on layout) -
+// SDL's window size can keep the portrait size after the rotation to landscape (iOS 27), and a portrait drawable in
+// the landscape view showed only the top-left of the picture. The sizes are logged when they change.
+void ui_fit_drawable(SDL_Window *win, void *l) {
+    CAMetalLayer *ml = (__bridge CAMetalLayer *)l;
+    int w, h;
+    SDL_GetWindowSizeInPixels(win, &w, &h);
+    CGSize px = CGSizeMake(w, h);
+#if TARGET_OS_IPHONE
+    CGSize b = ml.bounds.size;
+    double s = ml.contentsScale;
+    if (b.width > 0 && b.height > 0) px = CGSizeMake(b.width * s, b.height * s);
+    static int lw, lh, lbw, lbh;
+    if (w != lw || h != lh || (int)b.width != lbw || (int)b.height != lbh) {
+        int pw, ph;
+        SDL_GetWindowSize(win, &pw, &ph);
+        LOG("[window] SDL %dx%d px (%dx%d pt), view %.0fx%.0f pt x%.1f: drawable %.0fx%.0f\n", w, h, pw, ph, b.width,
+            b.height, s, px.width, px.height);
+        lw = w, lh = h, lbw = (int)b.width, lbh = (int)b.height;
+    }
+#endif
+    if (!CGSizeEqualToSize(ml.drawableSize, px)) ml.drawableSize = px;
+}
+
 // Quitting, before exit() (the window closed): the render thread stops between items (no nextDrawable / present
 // any more), then the GPU finishes what it was given - before exit()'s handlers and destructors run under it.
 void backend_quit(void) {
@@ -1691,8 +1715,6 @@ int ui_run(void) {
         menu_apply_window_requests(window);
         input_rumble_poll();
         input_led_poll();
-        int w, h;
-        SDL_GetWindowSizeInPixels(window, &w, &h);
-        layer.drawableSize = CGSizeMake(w, h);
+        ui_fit_drawable(window, (__bridge void *)layer);
     }
 }

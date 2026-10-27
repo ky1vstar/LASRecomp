@@ -57,6 +57,7 @@ SDL_Window *ui_window(void);
 #ifdef __APPLE__
 void *ui_metal_layer(void);
 void *ui_metal_device(void);
+void ui_fit_drawable(SDL_Window *win, void *layer);
 #else
 // runtime/nvn/vulkan: window frames and ImGui plumbing
 bool vk_frame_begin(const float clear[4]);
@@ -1684,9 +1685,7 @@ extern "C" void launcher_run(const char *root) {
         was_busy = busy;
 
 #ifdef __APPLE__
-        int w, h;
-        SDL_GetWindowSizeInPixels(win, &w, &h);
-        layer.drawableSize = CGSizeMake(w, h);
+        ui_fit_drawable(win, (__bridge void *)layer);
         @autoreleasepool {
             id<CAMetalDrawable> drawable = [layer nextDrawable];
             if (!drawable) { SDL_Delay(16); continue; }

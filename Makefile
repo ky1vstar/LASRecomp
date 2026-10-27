@@ -15,10 +15,10 @@ endif
 
 # iOS: its own generated code (another guest base, runtime/guest_base.h) and build dir; static SDL3 / FFmpeg from
 # `make deps-ios` (tools/build_deps_ios.sh); the game code is its own framework in the app.
-# IOS_GUEST_BASE: an iOS process has 58 GB of address space, but the kernel's reserves cut it into a few free gaps
-# and move with every launch (ASLR); 0x3_0000_0000 is the one gap free on every device and launch seen so far
-# (iPhone 15 Pro, iPhone 17 Pro / iOS 26.6), and the packed 5.25 GB layout of runtime/rt.h fits it.
-IOS_GUEST_BASE := 0x300000000
+# IOS_GUEST_BASE: test of the desktop base. iOS 27.0.1 (iPhone 15 Pro) maps its shared cache over 0x2_EA00_0000-
+# 0xF_C000_0000, so the old 0x3_0000_0000 is taken, but gives every app 0x70_0000_0000-0x80_0000_0000 free (with or
+# without extended-virtual-addressing); the packed 5.25 GB layout of runtime/rt.h fits there.
+IOS_GUEST_BASE := 0x7000000000
 IOS_MIN   ?= 16.0
 # the embedded CPython's version (BeeWare's Python-<PYV>-iOS-support): the one place it's spelled
 PYV       ?= 3.13

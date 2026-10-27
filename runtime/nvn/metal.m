@@ -1662,6 +1662,19 @@ void ui_fit_drawable(SDL_Window *win, void *l) {
     SDL_GetWindowSizeInPixels(win, &w, &h);
     CGSize px = CGSizeMake(w, h);
 #if TARGET_OS_IPHONE
+    // SDL's root view (its view controller's, the Metal view or its parent) keeps the frame SDL gave it at creation:
+    // on iOS 27 the window turns to landscape (852x393 on an iPhone 15 Pro) while that view stays portrait (393x852),
+    // and so do SDL's window size and the drawable. It follows the window here; SDL's viewDidLayoutSubviews then
+    // reports the new size.
+    UIView *v = [ml.delegate isKindOfClass:[UIView class]] ? (UIView *)ml.delegate : nil;
+    UIWindow *uw = v.window;
+    UIView *root = uw.rootViewController.view;
+    if (root && !CGRectEqualToRect(root.frame, uw.bounds)) {
+        LOG("[window] root view %.0fx%.0f, window %.0fx%.0f: resized to the window\n", root.frame.size.width,
+            root.frame.size.height, uw.bounds.size.width, uw.bounds.size.height);
+        root.frame = uw.bounds;
+    }
+    if (v && v != root && v.superview && !CGRectEqualToRect(v.frame, v.superview.bounds)) v.frame = v.superview.bounds;
     CGSize b = ml.bounds.size;
     double s = ml.contentsScale;
     if (b.width > 0 && b.height > 0) px = CGSizeMake(b.width * s, b.height * s);

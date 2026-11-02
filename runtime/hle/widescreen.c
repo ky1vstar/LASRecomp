@@ -33,6 +33,9 @@ float widescreen_effect_stretch(uint64_t fs_hash) {
     // keep the original vignette)
     extern bool g_room_wide;
     if (fs_hash == 0xc42e882c08c5e5ebull && g_room_wide) return g_wide;
+    // the backdrop behind an interior is a 16:9 quad: widened with the picture when the interior fills the window
+    extern bool widescreen_interior_fill(void);
+    if (fs_hash == BACKDROP_HASHES && widescreen_interior_fill()) return g_wide;
     return 1.0f;
 }
 
@@ -116,15 +119,71 @@ float rt_fovy(float orig) {
     return degrees ? wide * 180.0f / (float)M_PI : wide;
 }
 
-// Interiors: the indoor shadow setup runs while an interior is rendered (tools/patches.py).
-static uint64_t g_indoor_frame;
-float rt_indoor_aspect(void) {
-    extern uint64_t renderer_present_count(void);
-    uint64_t f = renderer_present_count();
-    if (ENV("LARECOMP_LOG_INDOOR") && f / 60 != g_indoor_frame / 60) LOG("[widescreen] indoor at frame %llu\n", (unsigned long long)f);
-    g_indoor_frame = f;
-    return 16.0f / 9.0f;
+// Interiors at the window's aspect (from the Android port, Nycolazs/LASRecomp-Android-Plus 78f5a53 / 1bb9ea3). The
+// patched literal (INDOOR_SITE) is in the game's render-resolution setup, GA(RES_SETUP)(system, step, views): h = 1080 -
+// 36 * step, w = h * <the literal>, kept in the system object (+0x6e38.. by the mode at +0x56a8, the step at
+// +0x6e48 / +0x6e4c) and given to every view. Interior cameras and the lights' screen tiles follow that size; the
+// overworld's camera follows the aspect sites instead and would be boxed by it. So the width follows the level:
+// the window's in interiors and dungeons, 16:9 on the overworld ("Field"). The game runs the setup only while some
+// levels load, so the runtime re-runs it from the game's present when the width it should have changes.
+// The wide width must fit the game's 1920-wide targets, so it costs lines (the resolution step below): a fifth at
+// 19.5:9, half at 32:9 - on by default on phones only, where the window is little wider than 16:9 and the room crop
+// (room_crop) would box most rooms. LARECOMP_INDOOR_AR=1 / 0: on / off anywhere.
+static struct { uint64_t sys, views, ctrl; bool valid, wide; float factor; } g_res;
+static bool indoor_wide(void) {
+    static int on = -1;
+    if (on < 0) on = getenv("LARECOMP_INDOOR_AR") ? atoi(getenv("LARECOMP_INDOOR_AR")) != 0 : PLAT_IOS;
+    if (!on || !widescreen_allowed() || g_wide <= 1.0f) return false;
+    uint64_t ps = LD64(GA(PLAYER_STATUS_PTR));  // PlayerStatus*: the level's name at +0 (the destination while loading)
+    const char *lv = ps ? (const char *)(uintptr_t)ps : NULL;
+    return lv && lv[0] && strcmp(lv, "Field") != 0;
 }
+const char *game_level_name(void);
+float rt_indoor_aspect(void) {
+    Cpu *c = kernel_current_cpu();  // at INDOOR_SITE: x21 the system object, x20 the views list, x19 its control block
+    if (c && c->x[21] && c->x[20] && c->x[19]) {
+        if (!g_res.valid || g_res.ctrl != c->x[19])  // (a weak reference of our own, never dropped: the re-run's)
+            __atomic_fetch_add((uint64_t *)(uintptr_t)(c->x[19] + 0x10), 1, __ATOMIC_SEQ_CST);
+        g_res.sys = c->x[21], g_res.views = c->x[20], g_res.ctrl = c->x[19], g_res.valid = true;
+    }
+    g_res.wide = indoor_wide();
+    g_res.factor = g_res.wide ? g_wide : 1.0f;
+    if (ENV("LARECOMP_LOG_INDOOR"))
+        LOG("[widescreen] render setup %s (x%.3f), level %s\n", g_res.wide ? "wide" : "16:9", g_res.factor, game_level_name());
+    return 16.0f / 9.0f * g_res.factor;
+}
+
+// From the game's present (nvnQueuePresentTexture, its render thread, between frames): the setup again when its
+// width should change (a level change in play, the window's shape)
+void widescreen_present_hook(void) {
+    extern int game_in_play(void);
+    if (!g_res.valid || !game_in_play()) return;
+    bool want = indoor_wide();
+    float f = want ? g_wide : 1.0f;
+    uint32_t mode = LD32(g_res.sys + 0x56a8), *stepp = (uint32_t *)(uintptr_t)(g_res.sys + (mode == 1 ? 0x6e4c : 0x6e48));
+    // the wide width has to fit the game's 1920-wide targets: the game's own resolution step lowers h until it does
+    // (the composite stretches the w x h part over the whole target)
+    uint32_t step = want ? (uint32_t)ceilf((1080.0f - 1920.0f / (16.0f / 9.0f * f)) / 36.0f) : 0;
+    if (ENV("LARECOMP_INDOOR_STEP0")) step = 0;
+    if (want == g_res.wide && fabsf(f - g_res.factor) < 0.01f && *stepp == step) return;
+    Cpu *c = kernel_current_cpu();
+    if (!c) return;
+    uint64_t pair[2] = {g_res.views, g_res.ctrl};
+    uint64_t save[3] = {c->x[0], c->x[1], c->x[2]};
+    c->x[0] = g_res.sys, c->x[1] = step, c->x[2] = (uint64_t)(uintptr_t)pair;
+    if (ENV("LARECOMP_LOG_INDOOR")) LOG("[widescreen] render setup again (step %u, mode %u), level %s\n", step, mode, game_level_name());
+    guest_call(c, GA(RES_SETUP));
+    c->x[0] = save[0], c->x[1] = save[1], c->x[2] = save[2];
+}
+
+// Interiors and dungeons rendered at the window's aspect show whole, not their 16:9 centre. LARECOMP_INTERIOR_FILL=0:
+// boxed (the wide render with the 16:9 crop of before).
+bool widescreen_interior_fill(void) {
+    static int on = -1;
+    if (on < 0) on = getenv("LARECOMP_INTERIOR_FILL") ? atoi(getenv("LARECOMP_INTERIOR_FILL")) != 0 : 1;
+    return on && g_res.wide;
+}
+RT_ON_RESET(widescreen_res_reset) { g_res.valid = g_res.wide = false; g_res.factor = 1.0f; }
 
 void romfs_file_read_hook(const char *path) { (void)path; }
 
@@ -303,6 +362,8 @@ void widescreen_present_crop(uint64_t frame, double shape, float crop[4], double
         if (game_in_play()) room_crop(frame, shape, &a, &b);
     }
     if (shape == 1.0 || !widescreen_frame_boxed(frame)) return;
+    extern int game_in_play(void);
+    if (shape > 1.0 && widescreen_interior_fill() && game_in_play()) { g_room_wide = true; return; }  // (the whole window)
     if (shape < 1.0) {
         crop[1] = (float)((1.0 - shape) / 2); crop[3] = (float)shape;
         double nh = *vh * shape; *vy += (*vh - nh) / 2; *vh = nh;

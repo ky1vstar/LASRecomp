@@ -4133,6 +4133,17 @@ static void draw_one(CmdRec *r, bool indexed) {
         // (single-texture draws only: the menu's frosted panels sample the same blurred copy but are UI pieces)
         if (fullscreen_quad && !reads_scene && pr->fi->ntex == 1 && (tex_sc[1][0][0] != 1 || tex_sc[1][0][1] != 1))
             reads_scene = true;
+        // an interior at the window's aspect (runtime/hle/widescreen.c rt_indoor_aspect): its scene has its own size,
+        // the window's shape - not 16:9, so not reshaped, but the composite all the same
+        if (fullscreen_quad && !reads_scene) {
+            int pw, ph;
+            pass_size(&pw, &ph);
+            float pa = ph ? (float)pw / (float)ph : 0;
+            for (int i = 0; i < pr->fi->ntex && i < 64 && pa > 1.8f; i++) {
+                float ta = tex_wh[1][i][1] ? (float)tex_wh[1][i][0] / (float)tex_wh[1][i][1] : 0;
+                if (ta > 1.8f && fabsf(ta - pa) < 0.02f * pa) reads_scene = true;
+            }
+        }
         extern uint64_t renderer_present_count(void);
         static uint64_t wide_frame = ~0ull;  // the latest draw this frame filled the window (nothing boxed since)
         extern uint64_t renderer_exec_frame(void);  // (the frame being translated)

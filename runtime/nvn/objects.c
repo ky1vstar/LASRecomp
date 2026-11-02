@@ -811,6 +811,8 @@ NVN(nvnQueueAcquireTexture) {
 NVN(nvnQueuePresentTexture) {
     NvnWindow *w = HOST(NvnWindow, A(1));
     int i = (int)A(2);
+    extern void widescreen_present_hook(void);  // (the game's render-resolution setup again when needed: this thread)
+    widescreen_present_hook();
     if (i >= 0 && i < w->num) backend_present(HOST(NvnTexture, w->textures[i]));
 }
 

@@ -827,6 +827,60 @@ static bool upload_nv12_now(NvnTexture *t, const void *nv12, uint32_t w, uint32_
     return true;
 }
 
+// The window around a picture narrower or shorter than it (movies, the title and file select, Authentic 16:9, boxed
+// rooms): the picture's own edges there, blurred and dimmed, instead of black (from the Android port, 4d234da).
+// Each bar shows the 30% of the picture beside it. Video > Side bars: Black keeps them black. The present pipeline,
+// texture and sampler are bound; (vx, vy, vw, vh) is where crop (uv of the texture) went.
+static bool side_bars_wanted(double W, double H, double vx, double vy, double vw, double vh, const float crop[4]) {
+    if (g_settings.black_bars || crop[2] <= 0 || crop[3] <= 0) return false;
+    return vx >= 1 || vy >= 1 || W - vx - vw >= 1 || H - vy - vh >= 1;
+}
+// The picture with a mip chain, for the bars' blur (blit: a copy, then its mips); nil when the format has no mips
+static id<MTLTexture> bars_mip;
+static id<MTLTexture> bars_source(id<MTLCommandBuffer> cb, id<MTLTexture> src) {
+    if (!bars_mip || bars_mip.width != src.width || bars_mip.height != src.height || bars_mip.pixelFormat != src.pixelFormat) {
+        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:src.pixelFormat width:src.width
+                                                                                    height:src.height mipmapped:YES];
+        td.usage = MTLTextureUsageShaderRead;
+        td.storageMode = MTLStorageModePrivate;
+        bars_mip = [dev newTextureWithDescriptor:td];
+        if (!bars_mip) return nil;
+    }
+    id<MTLBlitCommandEncoder> bl = [cb blitCommandEncoder];
+    [bl copyFromTexture:src sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(src.width, src.height, 1)
+              toTexture:bars_mip destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+    [bl generateMipmapsForTexture:bars_mip];
+    [bl endEncoding];
+    return bars_mip;
+}
+static void side_bars(id<MTLRenderCommandEncoder> enc, id<MTLTexture> mip, double W, double H, double vx, double vy, double vw,
+                      double vh, const float crop[4], float flip) {
+    const float light = 0.42f, cw = crop[2] * 0.3f, ch = crop[3] * 0.3f;
+    // the level whose width is ~24-48 texels over the picture, the taps 1.5 of them apart (a 7x7 box spans a third of
+    // the picture): a colour wash of the edge, nothing in it to make out
+    int level = 0;
+    while (level + 1 < (int)mip.mipmapLevelCount && (double)(mip.width >> (level + 1)) * crop[2] >= 24) level++;
+    float tx = 1.0f / (float)MAX(1u, (unsigned)mip.width >> level), ty = 1.0f / (float)MAX(1u, (unsigned)mip.height >> level);
+    [enc setFragmentTexture:mip atIndex:0];
+    // (the texture's y runs down unless flipped: the strip above the picture is its top in the window either way)
+    float top = flip > 0.5f ? crop[1] + crop[3] - ch : crop[1], bottom = flip > 0.5f ? crop[1] : crop[1] + crop[3] - ch;
+    struct { double x, y, w, h; float uv[4]; } bar[4] = {
+        {0, vy, vx, vh, {crop[0], crop[1], cw, crop[3]}},
+        {vx + vw, vy, W - vx - vw, vh, {crop[0] + crop[2] - cw, crop[1], cw, crop[3]}},
+        {0, 0, W, vy, {crop[0], top, crop[2], ch}},
+        {0, vy + vh, W, H - vy - vh, {crop[0], bottom, crop[2], ch}},
+    };
+    for (int i = 0; i < 4; i++) {
+        if (bar[i].w < 1 || bar[i].h < 1) continue;
+        float pv[16] = {flip, 0, light, (float)level, bar[i].uv[0], bar[i].uv[1], bar[i].uv[2], bar[i].uv[3],
+                        0, 0, tx, ty, crop[0], crop[1], crop[0] + crop[2], crop[1] + crop[3]};
+        [enc setViewport:(MTLViewport){bar[i].x, bar[i].y, bar[i].w, bar[i].h, 0, 1}];
+        [enc setVertexBytes:pv length:sizeof pv atIndex:0];
+        [enc setFragmentBytes:pv length:sizeof pv atIndex:1];
+        [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    }
+}
+
 // ================================================================== init / window
 static const char *present_src =
     "#include <metal_stdlib>\n"
@@ -837,8 +891,17 @@ static const char *present_src =
     "  V o; o.pos = float4(p * 2.0 - 1.0, 0, 1);\n"
     "  float2 uv = float2(p.x, pv[0].x > 0.5 ? p.y : 1.0 - p.y); o.uv = pv[1].xy + uv * pv[1].zw; return o; }\n"
     "fragment float4 fs(V in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]],\n"
-    "                   constant float4 &pf [[buffer(0)]]) {\n"
-    "  float3 c = t.sample(s, in.uv).rgb;\n"
+    "                   constant float4 &pf [[buffer(0)]], constant float4 *pv [[buffer(1)]]) {\n"
+    "  float3 c = 0;\n"
+    // (pv[0].z > 0: a side bar - the picture's mip level pv[0].w, a 7x7 blur of taps 1.5 of its texels (pv[2].zw) apart,
+    // clamped to the picture (pv[3]), dimmed to pv[0].z of its light; the level's bilinear filtering joins the taps)
+    "  if (pv[0].z <= 0.0) c = t.sample(s, in.uv).rgb;\n"
+    "  else {\n"
+    "    float2 r = pv[2].zw * 1.5;\n"
+    "    for (int j = -3; j <= 3; j++) for (int i = -3; i <= 3; i++)\n"
+    "      c += t.sample(s, clamp(in.uv + float2(i, j) * r, pv[3].xy, pv[3].zw), level(pv[0].w)).rgb;\n"
+    "    c = c / 49.0 * pv[0].z;\n"
+    "  }\n"
     SCREEN_FILTER_SRC("float3")  // (the screen filter: screen_filter.h)
     "  return float4(c, 1.0); }\n";
 
@@ -855,6 +918,8 @@ void backend_init(void) {
     present_pipe = [dev newRenderPipelineStateWithDescriptor:pd error:&err];
     MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new];
     sd.minFilter = sd.magFilter = MTLSamplerMinMagFilterLinear;
+    sd.mipFilter = MTLSamplerMipFilterLinear;  // (the side bars sample a mip level; the picture itself has one level)
+    sd.sAddressMode = sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
     present_sampler = [dev newSamplerStateWithDescriptor:sd];
     // Wrap the guest heap: memory pools live there, and GPU addresses are guest addresses.
     g_guest_buffer_base = HEAP_BASE;
@@ -1418,6 +1483,16 @@ void backend_present_now(NvnTexture *t, uint64_t frame) {
             }
             memcpy(g_shot_crop, crop, sizeof crop);  // (shots of the game image: the presented crop, of the content part)
             if (!up) { crop[0] *= fx; crop[1] *= fy; crop[2] *= fx; crop[3] *= fy; }  // (sampled directly: the content part)
+            id<MTLTexture> bars = nil;  // (the side bars' blurred source: its own blit, outside the drawable's pass)
+            if (side_bars_wanted(dw, dh, vx, vy, vw, vh, crop)) {
+                [enc endEncoding];
+                bars = bars_source(cb, src);
+                MTLRenderPassDescriptor *rp2 = [MTLRenderPassDescriptor renderPassDescriptor];
+                rp2.colorAttachments[0].texture = drawable.texture;
+                rp2.colorAttachments[0].loadAction = MTLLoadActionLoad;
+                rp2.colorAttachments[0].storeAction = MTLStoreActionStore;
+                enc = [cb renderCommandEncoderWithDescriptor:rp2];
+            }
             float flip = renderer_origin_lower_left() ? 1.0f : 0.0f;
             [enc setViewport:(MTLViewport){vx, vy, vw, vh, 0, 1}];
             [enc setRenderPipelineState:present_pipe];
@@ -1426,9 +1501,11 @@ void backend_present_now(NvnTexture *t, uint64_t frame) {
             float pf[4];
             screen_filter_params(pf);
             [enc setFragmentBytes:pf length:sizeof pf atIndex:0];
+            [enc setFragmentBytes:pv length:sizeof pv atIndex:1];
             [enc setFragmentTexture:src atIndex:0];
             [enc setFragmentSamplerState:present_sampler atIndex:0];
             [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+            if (bars) side_bars(enc, bars, dw, dh, vx, vy, vw, vh, crop, flip);
             scene = src;
             memcpy(scene_uv, crop, sizeof scene_uv);
         }

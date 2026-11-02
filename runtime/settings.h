@@ -32,6 +32,7 @@ enum { RANDO_PRESETS_MAX = 20 };  // (the Randomizer tab's own presets: settings
 
 typedef struct {
     int aspect;          // ASPECT_*: unlocked = fill the window (wider/taller views), original = 16:9 with bars
+    bool black_bars;     // the bars around a picture narrower than the window plain black (else its blurred edges)
     bool fullscreen;
     int res_mode;        // RES_MATCH, 1..4 (N x the Switch's 1080p), RES_DYNAMIC, RES_Q75/50/25 (share of the display)
     bool res_auto;       // never chosen: the default for this GPU (settings_resolve_defaults); saved as "auto"

@@ -545,6 +545,16 @@ static void tab_display(void) {
     opt_choice("Aspect ratio", &g_settings.aspect, aspects, 2, ASPECT_UNLOCKED,
                "Unlocked fills the window and shows more of the island on wide screens, up to ultrawide. Original keeps "
                "the game's 16:9 view with bars.");
+#ifdef __APPLE__  // (the Metal present draws them: runtime/nvn/metal.m side_bars)
+    {
+        static const char *barn[] = {LN("Blurred picture"), LN("Black")};
+        int v = g_settings.black_bars ? 1 : 0;
+        if (opt_choice("Side bars", &v, barn, 2, 0,
+                       "What fills the screen around a picture narrower (or taller) than it - movies, menus, the file "
+                       "select, Original 16:9: the picture's own edges, blurred and dimmed, or plain black."))
+            g_settings.black_bars = v != 0;
+    }
+#endif
     bool fs = g_settings.fullscreen;
     if (!PLAT_IOS && opt_toggle("Fullscreen", &fs, false, "Fills the screen. You can also press F11, Alt+Enter or Cmd+Ctrl+F.")) {
         g_settings.fullscreen = fs;

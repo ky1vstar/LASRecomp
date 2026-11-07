@@ -73,11 +73,13 @@ bool ui_text_field_rect(ImVec2 *mn, ImVec2 *mx) {
     *mn = s_field.mn, *mx = s_field.mx;
     return true;
 }
+#if PLAT_TOUCH
 static bool any_key_pressed(void) {
     for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_GamepadStart; k++)
         if (ImGui::IsKeyPressed((ImGuiKey)k, false)) return true;
     return false;
 }
+#endif
 
 // (test) LARECOMP_FIELD_FOCUS=<label>:<n>[:edit]: the n-th time field <label> is drawn it gets the nav cursor (a
 // controller's A - LARECOMP_HOST_INPUT sdlpad:east - then opens the keyboard); :edit starts typing in it instead.
@@ -97,12 +99,14 @@ bool ui_input_text(const char *label, char *buf, size_t size, ImGuiInputTextFlag
     if (test == 2) ImGui::SetKeyboardFocusHere();
     bool r = hint ? ImGui::InputTextWithHint(label, hint, buf, size, flags) : ImGui::InputText(label, buf, size, flags);
     ImGuiID id = ImGui::GetItemID();
+#if PLAT_TOUCH  // (the field's rect for the system keyboard: menu.mm g_ime_rect; a desktop has no keyboard to clear)
     if (g.ActiveId == id && !s.open && (ImGui::IsItemActivated() || ImGui::IsItemEdited() || any_key_pressed())) s_field.pending = id;
     if (s_field.pending == id && g.ActiveId == id && !s.open) {  // (scrolled out of its pane: back in first, the frame after)
         if (ImGui::IsItemVisible())
             s_field.mn = ImGui::GetItemRectMin(), s_field.mx = ImGui::GetItemRectMax(), s_field.frame = ImGui::GetFrameCount(), s_field.pending = 0;
         else ImGui::SetScrollHereY(0.5f);
     }
+#endif
     if (test == 1) { ImGui::FocusItem(); ImGui::SetNavCursorVisible(true); }
     // (and in view for the screenshots for a few frames: the focus' own scroll misses on a NavFlattened page)
     static ImGuiID in_view_id;

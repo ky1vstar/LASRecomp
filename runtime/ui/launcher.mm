@@ -2003,8 +2003,10 @@ extern "C" void launcher_run(const char *root) {
                 if (seeds[i] == g_play_seed) want = (int)i + 1;
             if (want < 0) {
                 fprintf(stderr, "[launcher] play: seed \"%s\" is gone\n", g_play_seed.c_str());
+#if PLAT_IOS
             } else if (!status.empty() || g_busy) {  // (a quick action before the game files are set up)
                 fprintf(stderr, "[launcher] play: the game files aren't ready\n");
+#endif
             } else {
                 choice = want;
                 bind_capture_cancel();
@@ -2670,8 +2672,8 @@ extern "C" void launcher_run(const char *root) {
             ImGui::PopStyleColor();
             if (waiting) draw_busy_overlay(ds, "", false, true);
             bool osk_up = osk_is_open();  // (a text field activated with the controller: as the menu's keyboard)
-            {   // (the in-game menu's size for it: 1 at 1080 lines, the phone's enlargement as panel_layout's)
-                float osc = ds.y / 1080.0f * (PLAT_TOUCH && !plat_tablet() ? 1.35f : 1.0f);
+            {   // (phones: the in-game menu's size for it - 1 at 1080 lines, the enlargement as panel_layout's)
+                float osc = PLAT_TOUCH ? ds.y / 1080.0f * (plat_tablet() ? 1.0f : 1.35f) : s * 0.7f;
                 if (osk_up) menu_style_begin(osc), plastic_widgets(true), pieces = true;
                 osk_draw(g_font_menu, osc);
                 if (osk_up) plastic_widgets(false), menu_style_end();

@@ -496,6 +496,7 @@ static void astc_encode4(const uint8_t px[16][4], bool srgb, uint8_t *b) {
 // Level data <-> RGBA8 image (BC5: red, green -> R, G; alpha = green, the glyph's shape)
 static void decode_image(const Ref *r, const uint8_t *src, uint32_t row, uint8_t *img) {
     uint32_t W = r->w, H = r->h, bw = (W + 3) / 4, bh = (H + 3) / 4;
+    if (r->kind == K_OTHER) return;  // (identified only: its format isn't one of these)
     if (r->kind == K_RGBA8) { for (uint32_t y = 0; y < H; y++) memcpy(img + y * W * 4, src + y * row, W * 4); return; }
     if (r->kind == K_ASTC4) {
         uint8_t *blocks = malloc((size_t)bw * bh * 16);
@@ -524,6 +525,7 @@ static void decode_image(const Ref *r, const uint8_t *src, uint32_t row, uint8_t
 
 static void encode_image(const Ref *r, const uint8_t *img, const uint8_t *dirty, uint8_t *dst, uint32_t row) {
     uint32_t W = r->w, H = r->h, bw = (W + 3) / 4, bh = (H + 3) / 4;
+    if (r->kind == K_OTHER) return;
     if (r->kind == K_RGBA8) { for (uint32_t y = 0; y < H; y++) memcpy(dst + y * row, img + y * W * 4, W * 4); return; }
     for (uint32_t by = 0; by < bh; by++)
         for (uint32_t bx = 0; bx < bw; bx++) {

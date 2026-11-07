@@ -188,7 +188,7 @@ static void configure_inputs(float scale) {
         if (open) {
             if (g_cat != c) msg[0] = 0;
             g_cat = c;
-            if (!ImGui::IsMouseReleased(ImGuiMouseButton_Left)) g_focus = FOCUS_RIGHT;  // (a tap / click: no cursor)
+            if (!(ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Left))) g_focus = FOCUS_RIGHT;  // (a tap / click on it: no cursor)
             bind_capture_cancel();
         }
     }

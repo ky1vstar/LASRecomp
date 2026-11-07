@@ -40,17 +40,21 @@ static inline void __attribute__((format(printf, 1, 2))) rt_log(const char *fmt,
 #if PLAT_IOS                                          // (packed: the modules end at +0x5000000, main 29 MB, sdk 13 MB)
 #define GUEST_HI_OFF     0x0150000000ull                 // 5.25 GB
 #define HLE_OFF          0x0008000000ull
+#define TLS_OFF          (HLE_OFF + 0x0001000000ull)
+#define HLE_HEAP_OFF     (HLE_OFF + 0x0002000000ull)
 #define HEAP_OFF         0x0018000000ull
 #define GUEST_STACK_OFF  0x00E8000000ull
 #define ALIAS_SIZE       0x0020000000ull                 // 512 MB
 #define ALIAS_OFF        (GUEST_HI_OFF - ALIAS_SIZE)      // (at the top, after the stacks)
-#else
+#else                                                 // (the Switch's own spacing, as before the iOS port)
 #define GUEST_HI_OFF     0x0320000000ull                 // 12.5 GB
 #define HLE_OFF          0x0080000000ull
+#define TLS_OFF          0x0090000000ull
+#define HLE_HEAP_OFF     0x0092000000ull
 #define HEAP_OFF         0x0240000000ull
 #define GUEST_STACK_OFF  0x0200000000ull
 #define ALIAS_SIZE       0x0100000000ull
-#define ALIAS_OFF        0x0100000000ull                 // (the Switch's: between HLE and the stacks)
+#define ALIAS_OFF        0x0100000000ull                 // (between HLE and the stacks)
 #endif
 #define GUEST_HI         (GUEST_BASE + GUEST_HI_OFF)
 #define HLE_BASE         (GUEST_BASE + HLE_OFF)
@@ -58,16 +62,16 @@ static inline void __attribute__((format(printf, 1, 2))) rt_log(const char *fmt,
 #define GUEST_STACK_BASE (GUEST_BASE + GUEST_STACK_OFF)
 #define GUEST_LO     GUEST_BASE
 #define HLE_SIZE     0x0000100000ull
-#define TLS_BASE     (HLE_BASE + 0x0001000000ull)
+#define TLS_BASE     (GUEST_BASE + TLS_OFF)
 #define TLS_SIZE     0x0000100000ull
-#define HLE_HEAP     (HLE_BASE + 0x0002000000ull)     // guest-visible memory owned by host code
+#define HLE_HEAP     (GUEST_BASE + HLE_HEAP_OFF)      // guest-visible memory owned by host code
 #define HLE_HEAP_SIZE 0x000E000000ull
 #define ALIAS_BASE   (GUEST_BASE + ALIAS_OFF)         // alias region (svcMapMemory targets)
 #define HEAP_MAX     0x00D0000000ull   // 3.25 GB
 // (no region over another; the stacks' end: kernel.h, which has their size)
-_Static_assert(HLE_OFF + 0x0001000000ull + TLS_SIZE <= HLE_OFF + 0x0002000000ull &&
-               HLE_OFF + 0x0002000000ull + HLE_HEAP_SIZE <= HEAP_OFF, "the HLE regions overlap");
-_Static_assert(ALIAS_OFF >= HLE_OFF + 0x0002000000ull + HLE_HEAP_SIZE || ALIAS_OFF + ALIAS_SIZE <= HLE_OFF,
+_Static_assert(HLE_OFF + HLE_SIZE <= TLS_OFF && TLS_OFF + TLS_SIZE <= HLE_HEAP_OFF && HLE_HEAP_OFF + HLE_HEAP_SIZE <= HEAP_OFF,
+               "the HLE regions overlap");
+_Static_assert(ALIAS_OFF >= HLE_HEAP_OFF + HLE_HEAP_SIZE || ALIAS_OFF + ALIAS_SIZE <= HLE_OFF,
                "the alias region runs into HLE");
 _Static_assert(ALIAS_OFF >= HEAP_OFF + HEAP_MAX || ALIAS_OFF + ALIAS_SIZE <= HEAP_OFF, "the alias region runs into the heap");
 _Static_assert(HEAP_OFF + HEAP_MAX <= GUEST_STACK_OFF || GUEST_STACK_OFF + 0x0040000000ull <= HEAP_OFF,
